@@ -1,0 +1,32 @@
+name: Windows installer
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Compile and package
+        shell: pwsh
+        run: ./build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MTR-Windows-Installer
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish unsigned preview installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.1.${{ github.run_number }} dist/MTR-Setup.exe dist/MTR-Setup.sha256 --target "${{ github.sha }}" --title "MTR preview build ${{ github.run_number }}" --notes "Unsigned experimental Windows Defender companion; not a standalone antivirus." --prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
