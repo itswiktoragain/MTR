@@ -38,3 +38,26 @@ class Worker:
             self.b.stop_event.wait(1)
     def start(self):
         for f in (self.run,self.processes):threading.Thread(target=f,daemon=True).start()
+
+    def inspect(self,path,automatic=False):
+        path=Path(path).absolute()
+        if path.is_relative_to(BASE) or path.is_relative_to(BUNDLE):return "skipped"
+        s=regular(path)
+        if s is None:return "skipped"
+        key=(path,identity(s))
+        with self.lock:
+            if automatic and key in self.cache:return "cached"
+        verdict,detail,expected,digest=scan(self.b.daemon,path)
+        if verdict=="retry":
+            self.b.stop_event.wait(.2)
+            verdict,detail,expected,digest=scan(self.b.daemon,path)
+        if verdict in ("clean","found"):
+            with self.lock:
+                self.cache[key]=True
+                if len(self.cache)>16000:self.cache.popitem(last=False)
+        if verdict=="found":
+            action=quarantine(path,expected,digest,detail,self.b.folders,self.b.auto_quarantine)
+            self.b.event("Malware signature detected","Signature: "+detail+"\nFile: "+str(path)+"\nSHA-256: "+digest+"\nAction: "+action+"\nA running process may already have executed.","warning","SIGNATURE")
+        elif verdict=="skipped":self.b.skips+=1
+        elif verdict in ("error","retry"):self.b.errors+=1
+        return verdict
