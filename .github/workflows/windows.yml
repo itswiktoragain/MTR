@@ -1,32 +1,38 @@
-name: Windows installer
+name: Windows Qt installer
 on:
   push:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: mtr-windows-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-python@v5
         with:
-          dotnet-version: '8.0.x'
+          python-version: '3.12'
+          architecture: x64
       - name: Install Inno Setup
+        shell: pwsh
         run: choco install innosetup -y --no-progress
-      - name: Compile and package
+      - name: Build and smoke-test Qt application and installer
         shell: pwsh
         run: ./build.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: MTR-Windows-Installer
+          name: MTR-Qt-Windows-Installer
           path: dist/*
           if-no-files-found: error
-      - name: Publish unsigned preview installer
+      - name: Publish Qt preview installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v0.1.${{ github.run_number }} dist/MTR-Setup.exe dist/MTR-Setup.sha256 --target "${{ github.sha }}" --title "MTR preview build ${{ github.run_number }}" --notes "Unsigned experimental Windows Defender companion; not a standalone antivirus." --prerelease
+          gh release create v0.2.${{ github.run_number }} dist/MTR-Setup.exe dist/MTR-Setup.sha256 dist/mtr-ui-preview.png --target "${{ github.sha }}" --title "MTR Qt preview build ${{ github.run_number }}" --notes "Unsigned experimental Qt 6 Windows Defender companion. UI screenshot uses synthetic smoke-test data. Not a standalone antivirus." --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
