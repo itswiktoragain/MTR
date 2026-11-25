@@ -1,19 +1,20 @@
-# MTR Antivirus
+# MTR Antivirus · Qt edition
 
-MTR is a Windows 10/11 x64 endpoint-security companion with a native desktop dashboard, real-time Microsoft Defender event monitoring, fullscreen threat alerts, and optional attack-surface-reduction hardening.
+MTR v0.2 is a Windows 10/11 x64 endpoint-security companion. It now uses a real Qt 6 desktop interface (PySide6), packaged into a self-contained Windows application. The earlier WinForms source is retained for reference, but is not included in the new installer.
 
-**Important:** MTR uses the installed Microsoft Defender Antivirus engine for on-access and pre-execution blocking, cloud reputation, signatures and remediation. It is not a replacement kernel-mode antivirus and cannot guarantee that every infostealer or zero-day is stopped. Keep Defender enabled and up to date. The optional hardening policies can affect legitimate applications; review and apply them explicitly.
+## Features
+- Windows-style navigation, live protection overview, quick and full scans, searchable session detection history and settings.
+- Native Windows Event Log subscription via the Windows API, with fullscreen threat alerts and a locally synthesized Alert Ready-style attention sound.
+- Live Defender component and signature status, signature update requests, optional attack surface reduction policies, and tray startup.
+- No MTR cloud service or file/secret uploads.
+
+**Important:** MTR uses the installed Microsoft Defender Antivirus engine for on-access and pre-execution blocking, behavior monitoring, signatures and remediation. MTR receives events after Defender reports them; it does not itself intercept process creation. It cannot guarantee that every infostealer or zero-day is stopped. Keep Defender enabled and updated. The optional hardening policies may affect legitimate applications; audit before enabling block mode.
 
 ## Install
-Download MTR-Setup.exe from the Windows build artifact in Actions (or the latest release when available). Administrator access is needed to install the app and change protection settings. The dashboard runs at logon, while Defender protects the machine before logon and independently of MTR.
+Download MTR-Setup.exe from a successful GitHub Actions build or its prerelease. The installer bundles Qt and Python, so users do not need to install either. Administrator access is needed for installation and explicit security policy changes. MTR runs in the tray at logon; Defender provides protection independently of the MTR dashboard. This is an unsigned experimental preview, not a certified Windows Security Center antivirus provider.
 
 ## Build
-The Windows GitHub Actions workflow builds the WinForms program and the Inno Setup executable installer. On a Windows machine with .NET SDK 8 and Inno Setup 6, run `build.ps1` from PowerShell.
+On a Windows x64 machine with Python 3.12 and Inno Setup 6 installed, run `./build.ps1` in PowerShell. The workflow installs pinned dependencies, checks Python syntax, exercises the Qt pages and alert in an offscreen smoke test, builds the application with PyInstaller, tests the packaged executable, creates the Inno Setup EXE and emits a SHA-256 checksum. A UI screenshot from the synthetic smoke test is included; it is not proof of a real Defender detection.
 
-## Privacy
-MTR reads local Defender health and threat logs. It does not upload files, secrets, or telemetry. Defender's own cloud and sample-submission settings follow Windows policy. The alert tone is a locally synthesized approximation of the Canadian Alert Ready attention signal, not an official broadcast recording. Use the dashboard's alert preview only in a private environment.
-
-## Testing
-Use the built-in alert preview for the fullscreen UI and use the official EICAR anti-malware test file in an isolated VM for Defender detection; no live malware is required. Windows Defender may intercept EICAR before you can save it. Review Defender protection history for confirmation. The build workflow checks that the program and installer are present and emits a SHA-256 checksum.
-
-MTR is an early, unsigned build. It is not a certified Windows Security Center antivirus provider. Do not use it as your only security layer.
+## Test protection
+Use the Settings alert preview and the official EICAR anti-malware test file in an isolated VM, not live malware. Defender may block EICAR before it can be saved; review Windows Security for actual remediation status. The alarm is a local approximation, not an official broadcast recording. Use the sound preview privately. The offscreen smoke test does not validate the native Windows Event Log subscription or actual protection behavior.
