@@ -201,7 +201,7 @@ class Dashboard(QMainWindow):
         self.tray=None
         if not test and QSystemTrayIcon.isSystemTrayAvailable():
             self.tray=QSystemTrayIcon(QIcon(logo_pix()),self); self.tray.setToolTip("MTR Antivirus")
-            menu=QMenu(); menu.addAction("Open MTR",self.show_dashboard); menu.addAction("Quick scan",lambda:self.start_scan(False)); menu.addSeparator(); menu.addAction("Exit MTR dashboard",self.quit)
+            menu=QMenu(self); menu.addAction("Open MTR",self.show_dashboard); menu.addAction("Quick scan",lambda:self.start_scan(False)); menu.addSeparator(); menu.addAction("Exit MTR dashboard",self.quit)
             self.tray.setContextMenu(menu); self.tray.activated.connect(lambda reason:self.show_dashboard() if reason in (QSystemTrayIcon.ActivationReason.DoubleClick,QSystemTrayIcon.ActivationReason.Trigger) else None); self.tray.show()
         self.timer=QTimer(self); self.timer.setInterval(30000); self.timer.timeout.connect(self.backend.health)
         if not test:
@@ -318,7 +318,7 @@ class Dashboard(QMainWindow):
 
     def selected_event(self):
         items=self.table.selectedItems()
-        self.details.setPlainText(items[0].data(Qt.ItemDataRole.UserRole).get("detail","") if items else "")
+        self.details.setPlainText((items[0].data(Qt.ItemDataRole.UserRole) or {}).get("detail","") if items else "")
 
     def on_detection(self,event):
         self.add_history(event)
@@ -346,6 +346,7 @@ class Dashboard(QMainWindow):
             event.ignore(); self.hide()
         else:
             self.settings.setValue("geometry",self.saveGeometry()); event.accept()
+            if not self.closing: QTimer.singleShot(0,self.quit)
 
     def quit(self):
         self.closing=True; self.settings.setValue("geometry",self.saveGeometry()); self.backend.stop_event.set(); self.timer.stop()
