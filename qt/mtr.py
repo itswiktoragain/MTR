@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabe
     QHeaderView, QAbstractItemView, QLineEdit, QCheckBox, QDialog, QMessageBox, QSystemTrayIcon,
     QMenu, QSizePolicy, QPlainTextEdit)
 from mtr_backend import Backend
+from engine_settings import BASE
+from engine_selftest import selftest
 
 PATHS = {
     "shield": '<path d="M12 2.4 21 6v6c0 5.3-3.7 8.8-9 10-5.3-1.2-9-4.7-9-10V6z"/><path d="m8 12 2.7 2.7 5.7-6"/>',
@@ -126,8 +128,10 @@ def set_state(widget, value):
     widget.setText("Active" if value is True else "Off" if value is False else "Not verified")
     widget.setObjectName(status_name(value)); widget.style().unpolish(widget); widget.style().polish(widget)
 
-def windows_security():
-    QDesktopServices.openUrl(QUrl("windowsdefender:"))
+def open_quarantine():
+    folder=BASE/"quarantine"
+    folder.mkdir(parents=True,exist_ok=True)
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
 class Alert(QDialog):
     def __init__(self, event, audio_path, sound, test=False):
@@ -140,9 +144,9 @@ class Alert(QDialog):
         row=hbox(spacing=14); warning=QLabel(); warning.setPixmap(icon("warning","#ffffff",42).pixmap(42,42)); row.addWidget(warning)
         heading=label("MTR  /  TEST ALERT" if test else "MTR  /  SECURITY ALERT"); heading.setStyleSheet("font-size:15pt;font-weight:650"); row.addWidget(heading); row.addStretch(); outer.addLayout(row)
         title=label(event["title"],wrap=True); title.setStyleSheet("font-size:34pt;font-weight:650"); outer.addWidget(title)
-        note=label("This is only a test. No malware was detected." if test else "Windows Defender reported a security event. Review the action and remediation status.",wrap=True); note.setStyleSheet("font-size:14pt;color:#f5d9db"); outer.addWidget(note)
+        note=label("This is only a test. No malware was detected." if test else "MTR detected a security event through its independent engine. Review the signature and containment status.",wrap=True); note.setStyleSheet("font-size:14pt;color:#f5d9db"); outer.addWidget(note)
         details=QPlainTextEdit(event.get("detail","")); details.setReadOnly(True); details.setMaximumHeight(240); outer.addWidget(details)
-        controls=hbox(); controls.addWidget(button("Open Windows Security", windows_security, "external")); silence=button("Silence alarm",self.silence); silence.setObjectName("quiet"); controls.addWidget(silence); controls.addWidget(button("Dismiss alert",self.accept)); controls.addStretch(); outer.addLayout(controls)
+        controls=hbox(); controls.addWidget(button("Open quarantine folder", open_quarantine, "external")); silence=button("Silence alarm",self.silence); silence.setObjectName("quiet"); controls.addWidget(silence); controls.addWidget(button("Dismiss alert",self.accept)); controls.addStretch(); outer.addLayout(controls)
         hint=label("Esc dismisses the alert. MTR never locks your desktop."); hint.setStyleSheet("color:#f5d9db"); outer.addWidget(hint); outer.addStretch(1)
         self.finished.connect(lambda _:self.silence())
 
@@ -195,7 +199,7 @@ class Dashboard(QMainWindow):
         for index,(title,symbol) in enumerate([("Overview","home"),("Virus scans","scan"),("Detection history","history"),("Settings","settings")]):
             nav=QPushButton(title); nav.setObjectName("nav"); nav.setIcon(icon(symbol)); nav.setIconSize(QSize(20,20)); nav.setCheckable(True); nav.setCursor(Qt.CursorShape.PointingHandCursor); self.navigation.addButton(nav,index); rail_layout.addWidget(nav)
         self.navigation.idClicked.connect(self.stack.setCurrentIndex); self.navigation.button(0).setChecked(True)
-        rail_layout.addStretch(); rail_layout.addWidget(label("Windows Defender engine","small",True)); rail_layout.addWidget(label("MTR v0.2.0  •  Preview","small"))
+        rail_layout.addStretch(); rail_layout.addWidget(label("ClamAV engine","small",True)); rail_layout.addWidget(label("MTR v0.3.0  •  Preview","small"))
         shell.addWidget(rail); shell.addWidget(self.stack,1)
         self.overview_page(); self.scan_page(); self.history_page(); self.settings_page()
         self.tray=None
@@ -217,29 +221,29 @@ class Dashboard(QMainWindow):
         layout=self.page("Protection overview","Review the current Windows protection status and recent security activity.")
         self.hero=panel("hero"); self.hero.setProperty("health","unknown"); hero=hbox(self.hero,(22,22,22,22),18)
         self.hero_icon=QLabel(); self.hero_icon.setPixmap(icon("shield","#647182",76).pixmap(76,76)); hero.addWidget(self.hero_icon,0,Qt.AlignmentFlag.AlignVCenter)
-        info=vbox(spacing=7); self.hero_title=label("Checking protection…","heroTitle",True); self.hero_text=label("Waiting for Windows Defender to report its status.","muted",True); info.addWidget(self.hero_title); info.addWidget(self.hero_text)
-        actions=hbox(); actions.addWidget(button("Quick scan",lambda:self.start_scan(False), "scan",True)); actions.addWidget(button("Windows Security",windows_security,"external")); actions.addStretch(); info.addLayout(actions); hero.addLayout(info,1)
+        info=vbox(spacing=7); self.hero_title=label("Checking protection…","heroTitle",True); self.hero_text=label("Loading the ClamAV engine and its signature database.","muted",True); info.addWidget(self.hero_title); info.addWidget(self.hero_text)
+        actions=hbox(); actions.addWidget(button("Quick scan",lambda:self.start_scan(False), "scan",True)); actions.addWidget(button("Quarantine",open_quarantine,"external")); actions.addStretch(); info.addLayout(actions); hero.addLayout(info,1)
         layout.addWidget(self.hero)
         layout.addWidget(label("Protection components","section"))
         surface=panel(); rows=vbox(surface,(17,10,17,10),1); self.states={}
-        for key,title,desc in [("realtime","Real-time protection","On-access scanning and blocking"),("behavior","Behavior monitoring","Suspicious activity detection"),("ioav","Downloaded file scanning","Scan internet downloads and attachments"),("antivirus","Antivirus engine","Microsoft Defender Antivirus")]:
+        for key,title,desc in [("realtime","File-change monitoring","Scan newly created or modified files in watched folders"),("behavior","Process-image monitoring","Scan executable images of newly observed current-user processes"),("ioav","Signature database","Official ClamAV definitions installed"),("antivirus","Antivirus engine","Independent ClamAV scanner")]:
             row=hbox(spacing=10); text=vbox(spacing=2); text.addWidget(label(title,"value")); text.addWidget(label(desc,"small",True)); row.addLayout(text,1); state=label("Not verified","stateUnknown"); self.states[key]=state; row.addWidget(state); rows.addLayout(row)
             if key!="antivirus":
                 divider=QFrame(); divider.setFrameShape(QFrame.Shape.HLine); divider.setStyleSheet("color:#e8ecf0"); rows.addWidget(divider)
         layout.addWidget(surface)
         status=panel(); box=vbox(status,(18,14,18,14),6); line=hbox(); line.addWidget(label("Detection monitor","section")); line.addStretch(); self.monitor_label=label("Connecting…","stateUnknown"); line.addWidget(self.monitor_label); box.addLayout(line)
-        self.monitor_detail=label("Waiting for the Windows Event Log subscription.","muted",True); box.addWidget(self.monitor_detail); self.signature=label("Signatures: not verified","muted",True); box.addWidget(self.signature); layout.addWidget(status); layout.addStretch()
+        self.monitor_detail=label("Starting live file and process monitoring.","muted",True); box.addWidget(self.monitor_detail); self.signature=label("Signatures: not verified","muted",True); box.addWidget(self.signature); layout.addWidget(status); layout.addStretch()
 
     def scan_page(self):
-        layout=self.page("Virus scans","Start an on-demand scan through the installed Microsoft Defender engine.")
+        layout=self.page("Virus scans","Scan files using the independent ClamAV detection engine.")
         self.scan_buttons=[]; self.scan_dates={}
-        for full,title,desc in [(False,"Quick scan","Checks locations commonly used by malware and running threats."),(True,"Full scan","Checks all accessible files and locations. May take several hours.")]:
+        for full,title,desc in [(False,"Quick scan","Scans downloads, desktop, documents, temporary files and startup folders."),(True,"Full scan","Scans accessible files in the current user profile, excluding reparse points. May take several hours.")]:
             frame=panel(); box=vbox(frame,(20,18,20,18),10); box.addWidget(label(title,"section")); box.addWidget(label(desc,"muted",True)); date=label("Last completed: not verified","small"); self.scan_dates[full]=date; box.addWidget(date); row=hbox(); b=button("Start "+title.lower(),lambda full=full:self.start_scan(full),"scan",True); self.scan_buttons.append(b); row.addWidget(b); row.addStretch(); box.addLayout(row); layout.addWidget(frame)
         self.scan_status=label("Ready to scan.","muted",True); layout.addWidget(self.scan_status); layout.addStretch()
 
     def history_page(self):
         layout=self.page("Detection history","Live security events reported since the MTR dashboard started.")
-        row=hbox(); self.filter=QLineEdit(); self.filter.setPlaceholderText("Search events, paths or threat names"); self.filter.textChanged.connect(self.refresh_history); row.addWidget(self.filter,1); row.addWidget(button("Windows Security",windows_security,"external")); layout.addLayout(row)
+        row=hbox(); self.filter=QLineEdit(); self.filter.setPlaceholderText("Search events, paths or threat names"); self.filter.textChanged.connect(self.refresh_history); row.addWidget(self.filter,1); row.addWidget(button("Quarantine",open_quarantine,"external")); layout.addLayout(row)
         self.table=QTableWidget(0,4); self.table.setHorizontalHeaderLabels(["Time","Activity","Status","Event ID"]); self.table.setMinimumHeight(245); self.table.setAlternatingRowColors(True); self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers); self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows); self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection); self.table.verticalHeader().hide()
         for i in (0,2,3): self.table.horizontalHeader().setSectionResizeMode(i,QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch); self.table.itemSelectionChanged.connect(self.selected_event); layout.addWidget(self.table,1)
@@ -247,13 +251,13 @@ class Dashboard(QMainWindow):
         self.history_count=label("No events in this session.","small"); layout.addWidget(self.history_count)
 
     def settings_page(self):
-        layout=self.page("Settings","Manage MTR notifications and optional Windows security hardening.")
+        layout=self.page("Settings","Manage MTR notifications, quarantine and signature updates.")
         notifications=panel(); box=vbox(notifications,(20,18,20,18),10); box.addWidget(label("Threat alerts","section")); box.addWidget(label("Fullscreen alerts appear for detections, failed remediation and selected protection warnings.","muted",True))
         self.sound=QCheckBox("Play the Alert Ready-style attention sound"); self.sound.setChecked(self.settings.value("sound",True,type=bool)); self.sound.toggled.connect(lambda value:self.settings.setValue("sound",value)); box.addWidget(self.sound)
         row=hbox(); row.addWidget(button("Preview fullscreen alert",self.preview,"warning")); row.addStretch(); box.addLayout(row); layout.addWidget(notifications)
-        frame=panel(); box=vbox(frame,(20,18,20,18),10); box.addWidget(label("Attack surface reduction","section")); box.addWidget(label("Optional rules for LSASS credential theft, executable email content and Office child processes. These policies may disrupt legitimate software. Audit first.","muted",True)); row=hbox(); self.audit_button=button("Enable audit mode",lambda:self.harden(False)); self.block_button=button("Enable block mode",lambda:self.harden(True)); row.addWidget(self.audit_button); row.addWidget(self.block_button); row.addStretch(); box.addLayout(row); self.harden_status=label("No changes requested in this session.","small",True); box.addWidget(self.harden_status); layout.addWidget(frame)
-        frame=panel(); box=vbox(frame,(20,18,20,18),10); box.addWidget(label("Security intelligence","section")); box.addWidget(label("Microsoft Defender manages the signature database. MTR can request an update.","muted",True)); row=hbox(); self.update_button=button("Update signatures",self.update_signatures,"refresh"); row.addWidget(self.update_button); row.addStretch(); box.addLayout(row); self.update_status=label("Ready.","small",True); box.addWidget(self.update_status); layout.addWidget(frame)
-        layout.addWidget(label("MTR is a Defender companion, not a certified standalone antivirus. No product can guarantee perfect protection against every threat.","small",True)); layout.addStretch()
+        frame=panel(); box=vbox(frame,(20,18,20,18),10); box.addWidget(label("Quarantine","section")); box.addWidget(label("Automatically move files with confirmed signature detections from watched user folders on the same drive. Disabled by default. Locked files, system paths, changed files and linked files are not moved. False positives are possible.","muted",True)); self.auto_quarantine=QCheckBox("Automatically quarantine confirmed detections"); self.auto_quarantine.setChecked(self.settings.value("auto_quarantine",False,type=bool)); self.backend.set_quarantine(self.auto_quarantine.isChecked()); self.auto_quarantine.toggled.connect(self.set_quarantine); box.addWidget(self.auto_quarantine); row=hbox(); row.addWidget(button("Open quarantine folder",open_quarantine,"external")); row.addStretch(); box.addLayout(row); layout.addWidget(frame)
+        frame=panel(); box=vbox(frame,(20,18,20,18),10); box.addWidget(label("Security intelligence","section")); box.addWidget(label("FreshClam downloads official ClamAV signature databases. Initial setup requires an internet connection.","muted",True)); row=hbox(); self.update_button=button("Update signatures",self.update_signatures,"refresh"); row.addWidget(self.update_button); row.addStretch(); box.addLayout(row); self.update_status=label("Ready.","small",True); box.addWidget(self.update_status); layout.addWidget(frame)
+        layout.addWidget(label("Independent user-mode antivirus preview. File scanning and process-image polling do not guarantee pre-execution blocking. Keep your existing security layers enabled.","small",True)); layout.addStretch()
 
     def on_monitor(self,ok,message):
         self.monitor_ok=ok; self.monitor_label.setText("Listening" if ok else "Unavailable"); self.monitor_label.setObjectName("stateGood" if ok else "stateBad"); self.monitor_label.style().unpolish(self.monitor_label); self.monitor_label.style().polish(self.monitor_label); self.monitor_detail.setText(message)
@@ -263,11 +267,11 @@ class Dashboard(QMainWindow):
         values=[self.state.get(k) for k in self.states]
         for key,w in self.states.items(): set_state(w,self.state.get(key))
         if all(v is True for v in values):
-            key,title,desc,color="good","Protection is active","Windows Defender reports all monitored protection components are enabled.","#17633f"
+            key,title,desc,color="good","MTR monitoring is active","ClamAV is loaded and file and process-image monitoring are running.","#17633f"
         elif any(v is False for v in values):
-            key,title,desc,color="bad","Protection needs attention","One or more protection components are disabled. Open Windows Security to review.","#a92d33"
+            key,title,desc,color="bad","MTR needs attention","One or more protection components are disabled. Review the engine status below.","#a92d33"
         else:
-            key,title,desc,color="unknown","Protection not verified","MTR could not verify all protection components. Open Windows Security to check.","#647182"
+            key,title,desc,color="unknown","MTR status not verified","MTR could not verify all protection components. Review the engine status below.","#647182"
         self.hero.setProperty("health",key); self.hero.style().unpolish(self.hero); self.hero.style().polish(self.hero)
         self.hero_icon.setPixmap(icon("shield" if key!="bad" else "warning",color,76).pixmap(76,76)); self.hero_title.setText(title); self.hero_text.setText(desc)
         self.signature.setText("Signatures: "+str(self.state.get("signature") or "not verified")+"  •  Updated: "+str(self.state.get("updated") or "unknown"))
@@ -276,13 +280,11 @@ class Dashboard(QMainWindow):
     def operation_done(self,key,result,error):
         self.backend.running.discard(key)
         if key=="health": self.render_health(result if not error else {}); return
-        status=("Operation failed: "+error) if error else "Operation completed."
+        status=("Operation failed: "+error) if error else str(result or "Operation completed.")
         if key=="scan":
             for b in self.scan_buttons:b.setEnabled(True)
-            self.scan_status.setText(status+" Check Windows Security for scan results.")
+            self.scan_status.setText(status)
         elif key=="update":self.update_button.setEnabled(True); self.update_status.setText(status)
-        elif key=="harden":
-            self.audit_button.setEnabled(True); self.block_button.setEnabled(True); self.harden_status.setText(status)
         self.add_history({"time":datetime.now().isoformat(),"title":{"scan":"Scan","update":"Signature update","harden":"Policy change"}.get(key,key),"level":"warning" if error else "info","detail":status,"id":"—"})
         self.backend.health()
 
@@ -290,16 +292,15 @@ class Dashboard(QMainWindow):
         if self.test:return
         if self.backend.scan(full):
             for b in self.scan_buttons:b.setEnabled(False)
-            self.scan_status.setText("Scan requested. Approve the Windows elevation prompt if shown.")
+            self.scan_status.setText("Scanning current-user files. MTR reports completed, skipped and failed scans.")
             self.navigation.button(1).setChecked(True); self.stack.setCurrentIndex(1)
 
     def update_signatures(self):
-        if self.backend.update():self.update_button.setEnabled(False); self.update_status.setText("Update requested. Approve the Windows elevation prompt if shown.")
+        if self.backend.update():self.update_button.setEnabled(False); self.update_status.setText("Downloading signed ClamAV definitions and reloading the engine.")
 
-    def harden(self,block):
-        choice=QMessageBox.question(self,"Change Defender policy","Configure three attack surface reduction rules in "+("block" if block else "audit")+" mode? Existing values for these rules may change. Review and revert via Windows security policy if necessary.")
-        if choice==QMessageBox.StandardButton.Yes and self.backend.harden(block):
-            self.audit_button.setEnabled(False); self.block_button.setEnabled(False); self.harden_status.setText("Policy change requested. Approve the Windows elevation prompt if shown.")
+    def set_quarantine(self,enabled):
+        self.settings.setValue("auto_quarantine",enabled)
+        self.backend.set_quarantine(enabled)
 
     def add_history(self,event):
         self.history.insert(0,event); del self.history[500:]; self.refresh_history()
@@ -324,7 +325,7 @@ class Dashboard(QMainWindow):
         self.add_history(event)
         if event["level"]=="warning":
             self.pending.append((event,False)); self.next_alert()
-        if event["id"] in (5001,5007):self.backend.health()
+        if event["id"]=="ENGINE":self.backend.health()
 
     def preview(self):
         self.pending.append(({"title":"Security alert preview","detail":"Example detection notification.\n\nNo malware was detected. The alarm is a locally synthesized approximation of the Canadian Alert Ready attention signal."},True)); self.next_alert()
@@ -349,13 +350,15 @@ class Dashboard(QMainWindow):
             if not self.closing: QTimer.singleShot(0,self.quit)
 
     def quit(self):
-        self.closing=True; self.settings.setValue("geometry",self.saveGeometry()); self.backend.stop_event.set(); self.timer.stop()
+        self.closing=True; self.settings.setValue("geometry",self.saveGeometry()); self.backend.close(); self.timer.stop()
         if self.alert:self.alert.reject()
         if self.tray:self.tray.hide()
         self.alarm_dir.cleanup(); QApplication.instance().quit()
 
 def main():
     app=QApplication(sys.argv); app.setApplicationName("MTR Antivirus"); app.setOrganizationName("MTR"); app.setStyle("Fusion"); app.setFont(QFont("Segoe UI",10)); app.setStyleSheet(STYLE); app.setWindowIcon(QIcon(logo_pix()))
+    if "--engine-selftest" in sys.argv:
+        selftest(); return 0
     if "--make-icon" in sys.argv:
         make_ico(sys.argv[sys.argv.index("--make-icon")+1]); return 0
     if "--smoke-test" in sys.argv:
@@ -379,7 +382,7 @@ def main():
             peer=server.nextPendingConnection(); peer.disconnectFromServer(); peer.deleteLater()
         window.show_dashboard()
     server.newConnection.connect(wake)
-    app.aboutToQuit.connect(window.backend.stop_event.set)
+    app.aboutToQuit.connect(window.backend.close)
     if "--background" not in sys.argv or window.tray is None:window.show()
     return app.exec()
 

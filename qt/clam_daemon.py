@@ -2,21 +2,24 @@ import os, socket, subprocess, time
 from engine_settings import BASE, BUNDLE
 from clam_engine import FLAGS, signatures
 class Daemon:
-    def __init__(self):
+    def __init__(self,base=BASE,bundle=BUNDLE):
+        self.base=base;self.bundle=bundle;self.stopped=False
+        self.base.mkdir(parents=True,exist_ok=True)
         self.proc=None
         self.port=None
         self.log=None
-    def start(self):
+    def start(self,test=False):
+        if self.stopped:raise RuntimeError("Engine stopped")
         self.close()
-        if not signatures():raise RuntimeError("Signature database missing")
+        if not test and not signatures():raise RuntimeError("Signature database missing")
         with socket.socket() as s:
             s.bind(("127.0.0.1",0));self.port=s.getsockname()[1]
-        cfg=BASE/"clamd.conf"
-        cfg.write_text('DatabaseDirectory "'+str(BASE/"db")+'"\nTCPAddr 127.0.0.1\nTCPSocket '+str(self.port)+'\nForeground yes\nMaxThreads 4\nStreamMaxLength 64M\nMaxFileSize 64M\nMaxScanSize 128M\nAlertExceedsMax yes\n',encoding="utf-8")
-        self.log=(BASE/"clamd.log").open("wb")
-        self.proc=subprocess.Popen([str(BUNDLE/"clamd.exe"),"--config-file="+str(cfg)],cwd=BUNDLE,stdout=self.log,stderr=subprocess.STDOUT,creationflags=FLAGS)
+        cfg=self.base/"clamd.conf"
+        cfg.write_text('DatabaseDirectory "'+str(self.base/"db")+'"\nTCPAddr 127.0.0.1\nTCPSocket '+str(self.port)+'\nForeground yes\nMaxThreads 4\nStreamMaxLength 64M\nMaxFileSize 64M\nMaxScanSize 128M\nAlertExceedsMax yes\n',encoding="utf-8")
+        self.log=(self.base/"clamd.log").open("wb")
+        self.proc=subprocess.Popen([str(self.bundle/"clamd.exe"),"--config-file="+str(cfg)],cwd=self.bundle,stdout=self.log,stderr=subprocess.STDOUT,creationflags=FLAGS)
         for i in range(360):
-            if self.proc.poll() is not None:break
+            if self.stopped or not self.proc or self.proc.poll() is not None:break
             if self.ready():return
             time.sleep(.5)
         self.close();raise RuntimeError("ClamAV daemon did not start. See clamd.log.")

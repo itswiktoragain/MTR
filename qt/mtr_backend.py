@@ -1,192 +1,98 @@
-"""Windows protection backend. No third-party driver or security-provider registration."""
-import base64
-import ctypes
-from ctypes import wintypes as W
-import json
-import os
-import subprocess
-import threading
-import xml.etree.ElementTree as ET
+"""Independent user-mode ClamAV backend."""
+import os, threading, time
+from datetime import datetime
+from pathlib import Path
 from PySide6.QtCore import QObject, Signal
-
-CHANNEL = "Microsoft-Windows-Windows Defender/Operational"
-EVENTS = {1116: ("Threat detected", "warning"), 1117: ("Remediation reported", "info"),
-          1118: ("Remediation failed", "warning"), 1121: ("Attack surface rule blocked activity", "warning"),
-          5001: ("Real-time protection disabled", "warning"), 5007: ("Protection configuration changed", "info")}
-NS = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
-RULES = ("9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2",
-         "be9ba2d9-53ea-4cdc-84e5-9b1eeee46550",
-         "d4f940ab-401b-4efc-aadc-ad5f3c50688a")
-HEALTH_SCRIPT = """$s=Get-MpComputerStatus
-[pscustomobject]@{
- antivirus=$s.AntivirusEnabled
- realtime=$s.RealTimeProtectionEnabled
- behavior=$s.BehaviorMonitorEnabled
- ioav=$s.IoavProtectionEnabled
- signature=$s.AntivirusSignatureVersion
- updated=if($s.AntivirusSignatureLastUpdated){$s.AntivirusSignatureLastUpdated.ToString('yyyy-MM-dd HH:mm')}
- quick=if($s.QuickScanEndTime){$s.QuickScanEndTime.ToString('yyyy-MM-dd HH:mm')}
- full=if($s.FullScanEndTime){$s.FullScanEndTime.ToString('yyyy-MM-dd HH:mm')}
-}|ConvertTo-Json -Compress"""
-
-def encoded(script):
-    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-
-def powershell(script, elevate=False, timeout=30):
-    if os.name != "nt":
-        raise RuntimeError("Windows Defender requires Windows.")
-    script = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " + script
-    exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    if elevate:
-        child = encoded(script)
-        script = ("$ErrorActionPreference='Stop'; "
-                  "$p=Start-Process -FilePath '" + exe.replace("'", "''") +
-                  "' -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','" + child +
-                  "' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode")
-    p = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded(script)],
-                       capture_output=True, encoding="utf-8", errors="replace",
-                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=timeout)
-    if p.returncode:
-        raise RuntimeError(p.stderr.strip()[:400] or "Operation failed, was cancelled, or was blocked by Windows policy.")
-    return p.stdout.strip()
-
-def parse_event(xml):
-    root = ET.fromstring(xml)
-    system = root.find("e:System", NS)
-    event_id = int(system.findtext("e:EventID", "0", NS))
-    if event_id not in EVENTS:
-        return None
-    fields = {node.get("Name", "Data"): node.text or "" for node in root.findall("e:EventData/e:Data", NS)}
-    title, level = EVENTS[event_id]
-    relevant = []
-    for name in ("Threat Name", "Path", "Process Name", "Action Name", "Error Description", "Rule ID", "Detection User"):
-        if fields.get(name):
-            relevant.append(name + ": " + fields[name])
-    if not relevant:
-        relevant = ["Windows Defender event " + str(event_id) + ". See Windows Security or Event Viewer for details."]
-    stamp = system.find("e:TimeCreated", NS)
-    return {"id": event_id, "title": title, "level": level,
-            "detail": "\n".join(relevant), "time": stamp.get("SystemTime", "") if stamp is not None else ""}
-
-def event_stream(stop, emit, status):
-    """Pull new events directly from the Windows Event Log API (no periodic PS processes)."""
-    if os.name != "nt":
-        status(False, "Windows Event Log is unavailable.")
-        return
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    evt = ctypes.WinDLL("wevtapi", use_last_error=True)
-    H = W.HANDLE
-    D = W.DWORD
-    B = W.BOOL
-    kernel.CreateEventW.argtypes = [ctypes.c_void_p, B, B, W.LPCWSTR]
-    kernel.CreateEventW.restype = H
-    kernel.WaitForSingleObject.argtypes = [H, D]
-    kernel.WaitForSingleObject.restype = D
-    kernel.ResetEvent.argtypes = [H]
-    kernel.ResetEvent.restype = B
-    kernel.CloseHandle.argtypes = [H]
-    kernel.CloseHandle.restype = B
-    evt.EvtSubscribe.argtypes = [H, H, W.LPCWSTR, W.LPCWSTR, H, ctypes.c_void_p, ctypes.c_void_p, D]
-    evt.EvtSubscribe.restype = H
-    evt.EvtNext.argtypes = [H, D, ctypes.POINTER(H), D, D, ctypes.POINTER(D)]
-    evt.EvtNext.restype = B
-    evt.EvtRender.argtypes = [H, H, D, D, ctypes.c_void_p, ctypes.POINTER(D), ctypes.POINTER(D)]
-    evt.EvtRender.restype = B
-    evt.EvtClose.argtypes = [H]
-    evt.EvtClose.restype = B
-    signal = kernel.CreateEventW(None, True, False, None)
-    if not signal:
-        status(False, str(ctypes.WinError(ctypes.get_last_error())))
-        return
-    subscription = None
-    try:
-        query = "*[System[" + " or ".join("EventID="+str(i) for i in EVENTS) + "]]"
-        subscription = evt.EvtSubscribe(None, signal, CHANNEL, query, None, None, None, 1)
-        if not subscription:
-            raise ctypes.WinError(ctypes.get_last_error())
-        status(True, "Listening to Windows Defender events.")
-        handles = (H * 16)()
-        while not stop.is_set():
-            wait = kernel.WaitForSingleObject(signal, 500)
-            if wait == 258:
-                continue
-            if wait != 0:
-                raise ctypes.WinError(ctypes.get_last_error())
-            kernel.ResetEvent(signal)
-            while not stop.is_set():
-                count = D()
-                if not evt.EvtNext(subscription, len(handles), handles, 0, 0, ctypes.byref(count)):
-                    code = ctypes.get_last_error()
-                    if code in (259, 1460):
-                        break
-                    raise ctypes.WinError(code)
-                for i in range(count.value):
-                    handle = handles[i]
-                    try:
-                        needed, properties = D(), D()
-                        evt.EvtRender(None, handle, 1, 0, None, ctypes.byref(needed), ctypes.byref(properties))
-                        if needed.value:
-                            buf = ctypes.create_string_buffer(needed.value)
-                            if evt.EvtRender(None, handle, 1, needed.value, buf, ctypes.byref(needed), ctypes.byref(properties)):
-                                event = parse_event(ctypes.wstring_at(ctypes.addressof(buf)))
-                                if event:
-                                    emit(event)
-                    except Exception:
-                        pass
-                    finally:
-                        evt.EvtClose(handle)
-    except Exception as exc:
-        status(False, "Event monitoring unavailable: " + str(exc))
-    finally:
-        if subscription:
-            evt.EvtClose(subscription)
-        kernel.CloseHandle(signal)
+from clam_engine import update_db, signatures
+from clam_daemon import Daemon
+from live_monitor import Monitor, roots
+from scan_worker import Worker
+from engine_settings import BASE, BUNDLE
 
 class Backend(QObject):
-    completed = Signal(str, object, str)
-    detection = Signal(object)
-    monitor_status = Signal(bool, str)
-    def __init__(self, parent=None):
+    completed=Signal(str,object,str)
+    detection=Signal(object)
+    monitor_status=Signal(bool,str)
+    def __init__(self,parent=None):
         super().__init__(parent)
-        self.stop_event = threading.Event()
-        self.running = set()
-        self.monitor = None
-
-    def watch(self):
-        if self.monitor and self.monitor.is_alive():
-            return
-        self.monitor = threading.Thread(target=event_stream, args=(self.stop_event, self.detection.emit, self.monitor_status.emit), daemon=True)
-        self.monitor.start()
-
-    def run(self, key, script, elevate=False, timeout=30):
-        if key in self.running:
-            return False
+        self.stop_event=threading.Event();self.running=set()
+        self.daemon=Daemon();self.folders=roots();self.worker=Worker(self)
+        self.monitor=Monitor(self.worker.offer);self.auto_quarantine=False
+        self.skips=0;self.errors=0;self.quick=None;self.full=None
+        self.started=False;self.loaded=False;self.last_error=""
+        self.setup_lock=threading.Lock();self.next_update=float("inf")
+    def event(self,title,detail,level="info",event_id="MTR"):
+        self.detection.emit({"time":datetime.now().astimezone().isoformat(),"title":title,"detail":detail,"level":level,"id":event_id})
+    def run(self,key,job):
+        if key in self.running:return False
         self.running.add(key)
-        def worker():
+        def execute():
+            try:result=job();error=""
+            except Exception as exc:result=None;error=str(exc)
+            if not self.stop_event.is_set():self.completed.emit(key,result,error)
+        threading.Thread(target=execute,daemon=True).start();return True
+    def watch(self):
+        if self.started:return
+        self.started=True
+        try:self.monitor.start(self.folders)
+        except Exception as e:self.last_error=str(e)
+        self.worker.start()
+        def boot():
             try:
-                result = powershell(script, elevate, timeout)
-                if key == "health":
-                    result = json.loads(result.lstrip("\ufeff"))
-                if not self.stop_event.is_set():
-                    self.completed.emit(key, result, "")
-            except Exception as exc:
-                if not self.stop_event.is_set():
-                    self.completed.emit(key, None, str(exc))
-        threading.Thread(target=worker, daemon=True).start()
-        return True
-
+                with self.setup_lock:
+                    if not signatures():update_db()
+                    if not self.stop_event.is_set():self.daemon.start();self.loaded=True
+            except Exception as e:
+                self.last_error=str(e);self.event("Engine unavailable",self.last_error,"warning","ENGINE")
+            self.next_update=time.monotonic()+3600
+            if not self.stop_event.is_set():self.report()
+        threading.Thread(target=boot,daemon=True).start()
+    def report(self):
+        ready=self.loaded and self.daemon.ready()
+        live=self.monitor.observer.is_alive() and bool(self.folders) and not self.worker.overflow
+        detail="Watching "+str(len(self.folders))+" user folders and new current-user process images. Skips: "+str(self.skips)+"; errors: "+str(self.errors)+"."
+        if self.worker.overflow:detail+=" Queue overflow; run a manual scan."
+        if not ready:detail="Engine unavailable or loading signatures. "+self.last_error
+        self.monitor_status.emit(ready and live and self.worker.process_live,detail)
+        return ready,live
     def health(self):
-        self.run("health", HEALTH_SCRIPT)
-
-    def scan(self, full=False):
-        return self.run("scan", "Start-MpScan -ScanType " + ("FullScan" if full else "QuickScan"), True, None)
-
+        def job():
+            ready,live=self.report();db=signatures()
+            newest=max((p.stat().st_mtime for p in db),default=0)
+            return {"antivirus":ready,"realtime":ready and live,"behavior":ready and self.worker.process_live,"ioav":bool(db),"signature":self.daemon.command(b"VERSION") if ready else "not loaded","updated":datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M") if newest else "not downloaded","quick":self.quick,"full":self.full}
+        self.run("health",job)
+        if self.started and time.monotonic()>=self.next_update:
+            self.next_update=time.monotonic()+14400;self.update()
     def update(self):
-        return self.run("update", "Update-MpSignature", True, 900)
-
-    def harden(self, block):
-        mode = "Enabled" if block else "AuditMode"
-        ids = ",".join("'" + rule + "'" for rule in RULES)
-        modes = ",".join("'" + mode + "'" for _ in RULES)
-        return self.run("harden", "Add-MpPreference -AttackSurfaceReductionRules_Ids @(" + ids +
-                        ") -AttackSurfaceReductionRules_Actions @(" + modes + ")", True, 300)
+        def job():
+            with self.setup_lock:
+                update_db()
+                if self.stop_event.is_set():return "Stopped."
+                self.loaded=False;self.daemon.start();self.loaded=True
+                with self.worker.lock:self.worker.cache.clear()
+                self.last_error=""
+            return "ClamAV signature database updated."
+        return self.run("update",job)
+    def scan(self,full=False):
+        def job():
+            if not self.loaded or not self.daemon.ready():raise RuntimeError("ClamAV is not ready. Download signatures first.")
+            counts={}
+            for root in ([Path.home()] if full else self.folders):
+                for parent,dirs,files in os.walk(root,followlinks=False):
+                    if self.stop_event.is_set():raise RuntimeError("Scan cancelled")
+                    dirs[:]=[d for d in dirs if not (Path(parent)/d).is_relative_to(BASE) and not os.path.isjunction(Path(parent)/d) and not (Path(parent)/d).is_symlink()]
+                    for name in files:
+                        if self.stop_event.is_set():raise RuntimeError("Scan cancelled")
+                        result=self.worker.inspect(Path(parent)/name);counts[result]=counts.get(result,0)+1
+            when=datetime.now().strftime("%Y-%m-%d %H:%M")
+            if full:self.full=when
+            else:self.quick=when
+            return "Scan complete. "+(", ".join(k+": "+str(v) for k,v in sorted(counts.items())) or "No readable files found.")
+        return self.run("scan",job)
+    def set_quarantine(self,value):
+        self.auto_quarantine=bool(value)
+        with self.worker.lock:self.worker.cache.clear()
+    def close(self):
+        if self.stop_event.is_set():return
+        self.stop_event.set();self.monitor.close()
+        self.loaded=False;self.daemon.stopped=True;self.daemon.close()

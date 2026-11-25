@@ -1,4 +1,4 @@
-name: Windows Qt installer
+name: Windows independent antivirus installer
 on:
   push:
     branches: [main]
@@ -26,7 +26,7 @@ jobs:
         run: ./build.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: MTR-Qt-Windows-Installer
+          name: MTR-Independent-Windows-Installer
           path: dist/*
           if-no-files-found: error
       - name: Publish Qt preview installer
@@ -34,5 +34,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v0.2.${{ github.run_number }} dist/MTR-Setup.exe dist/MTR-Setup.sha256 dist/mtr-ui-preview.png --target "${{ github.sha }}" --title "MTR Qt preview build ${{ github.run_number }}" --notes "Unsigned experimental Qt 6 Windows Defender companion. UI screenshot uses synthetic smoke-test data. Not a standalone antivirus." --prerelease
+          gh release create v0.3.${{ github.run_number }} dist/MTR-Setup.exe dist/MTR-Setup.sha256 dist/mtr-ui-preview.png dist/clamav-source.tar.gz dist/clamav-provenance.txt --target "${{ github.sha }}" --title "MTR independent antivirus preview build ${{ github.run_number }}" --notes "Unsigned experimental independent ClamAV user-mode antivirus. Includes upstream corresponding source archive. First launch downloads signatures. Not a kernel-mode protection product." --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }

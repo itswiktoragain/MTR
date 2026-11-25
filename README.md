@@ -1,20 +1,17 @@
-# MTR Antivirus · Qt edition
+# MTR Antivirus — independent engine
 
-MTR v0.2 is a Windows 10/11 x64 endpoint-security companion. It now uses a real Qt 6 desktop interface (PySide6), packaged into a self-contained Windows application. The earlier WinForms source is retained for reference, but is not included in the new installer.
+MTR v0.3 is a Windows 10/11 x64 antivirus preview built with Qt 6 and the independent open-source ClamAV scanning engine. The old WinForms code is historical only; the installer builds the Python/Qt application. No Defender APIs are used by the active backend.
 
-## Features
-- Windows-style navigation, live protection overview, quick and full scans, searchable session detection history and settings.
-- Native Windows Event Log subscription via the Windows API, with fullscreen threat alerts and a locally synthesized Alert Ready-style attention sound.
-- Live Defender component and signature status, signature update requests, optional attack surface reduction policies, and tray startup.
-- No MTR cloud service or file/secret uploads.
-
-**Important:** MTR uses the installed Microsoft Defender Antivirus engine for on-access and pre-execution blocking, behavior monitoring, signatures and remediation. MTR receives events after Defender reports them; it does not itself intercept process creation. It cannot guarantee that every infostealer or zero-day is stopped. Keep Defender enabled and updated. The optional hardening policies may affect legitimate applications; audit before enabling block mode.
-
-## Install
-Download MTR-Setup.exe from a successful GitHub Actions build or its prerelease. The installer bundles Qt and Python, so users do not need to install either. Administrator access is needed for installation and explicit security policy changes. MTR runs in the tray at logon; Defender provides protection independently of the MTR dashboard. This is an unsigned experimental preview, not a certified Windows Security Center antivirus provider.
+- Persistent ClamAV daemon bound to loopback, with streaming local scans.
+- FreshClam downloads official signed signature databases at first launch and checks periodically; no signatures are bundled initially. Protection is unavailable until download and engine load succeed. Internet access is required for updates.
+- Windows filesystem notifications for existing Downloads, Desktop, Documents, Temp and Startup folders; one-second polling of current-user executable images.
+- Quick scans of those locations; full scans of readable files under the current user profile.
+- 64 MiB file limit, archive/engine limits, inaccessible and reparse-point files skipped; queues are bounded and overflow is reported.
+- Fullscreen alerts and a synthesized Alert Ready-style sound. Optional same-volume quarantine for confirmed detections in watched user folders, off by default. Metadata records original paths and hashes; files are moved, not deleted. Restore manually only after confirming a false positive. Quarantine is a user-owned directory, not a hardened sandbox.
+- No automatic process termination, kernel driver, process-create interception, memory scanning, or Windows Security Center registration. This is not guaranteed pre-execution blocking, and a running threat may already have acted. Local processes can access the loopback daemon. Keep existing security layers enabled.
 
 ## Build
-On a Windows x64 machine with Python 3.12 and Inno Setup 6 installed, run `./build.ps1` in PowerShell. The workflow installs pinned dependencies, checks Python syntax, exercises the Qt pages and alert in an offscreen smoke test, builds the application with PyInstaller, tests the packaged executable, creates the Inno Setup EXE and emits a SHA-256 checksum. A UI screenshot from the synthetic smoke test is included; it is not proof of a real Defender detection.
+Run `./build.ps1` with Python 3.12 x64 and Inno Setup 6. CI fetches the current official ClamAV x64 ZIP and matching source archive from the Cisco-Talos/clamav GitHub releases, checks SHA-256 against release metadata when available, records the upstream version and hashes, bundles the engine and license files, and tests both source and packaged scanners against an isolated benign marker signature. It also tests the Qt interface and generates a synthetic UI screenshot. The installer is unsigned. The corresponding upstream source is supplied as a separate release asset. ClamAV remains subject to its upstream license.
 
-## Test protection
-Use the Settings alert preview and the official EICAR anti-malware test file in an isolated VM, not live malware. Defender may block EICAR before it can be saved; review Windows Security for actual remediation status. The alarm is a local approximation, not an official broadcast recording. Use the sound preview privately. The offscreen smoke test does not validate the native Windows Event Log subscription or actual protection behavior.
+## Testing
+The harmless marker test is performed with its own temporary database and never touches the live database. It checks detection and a clean verdict, not malware efficacy. You can also preview alerts in Settings. Use a disposable VM and standard safe antivirus test files for integration testing, not live malware.

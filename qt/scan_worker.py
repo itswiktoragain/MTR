@@ -16,11 +16,13 @@ class Worker:
         except queue.Full:self.overflow=True
     def run(self):
         while not self.b.stop_event.is_set():
-            if not self.b.daemon.proc or self.b.daemon.proc.poll() is not None:
+            if not self.b.loaded or not self.b.daemon.proc or self.b.daemon.proc.poll() is not None:
                 self.b.stop_event.wait(.5);continue
             try:p=self.q.get(timeout=.5)
             except queue.Empty:continue
-            try:self.inspect(p,True)
+            try:
+                self.b.stop_event.wait(.1)
+                if not self.b.stop_event.is_set():self.inspect(p,True)
             except Exception:self.b.errors+=1
             finally:self.q.task_done()
     def processes(self):

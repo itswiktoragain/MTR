@@ -1,7 +1,7 @@
 [Setup]
 AppId=MTR-Antivirus
 AppName=MTR Antivirus
-AppVersion=0.2.0
+AppVersion=0.3.0
 AppPublisher=MTR
 DefaultDirName={autopf}\MTR Antivirus
 DefaultGroupName=MTR Antivirus
